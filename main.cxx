@@ -100,7 +100,7 @@ char * make_time() {
 
     t = time(NULL);
     tmp = localtime(&t);
-    strftime(outstr, TIME_LEN, "[%D %H:%M:%S]", tmp);
+    strftime(outstr, TIME_LEN, "[%D %_H:%0M:%0S]", tmp);
 
     return time_string;
 }
@@ -305,7 +305,7 @@ int main(int argc, const char **argv)
     char *time_str = make_time();
     memset(&shared_context, 0, sizeof(struct context));
 
-    fprintf(logfile, "eapolproxy starting %s\n", __DATE__);
+    fprintf(logfile, "%s eapolproxy starting %s\n", time_str, __DATE__);
 
     fprintf(logfile, "%s starting %s\n", time_str, internal_devname);
     internal.start();
