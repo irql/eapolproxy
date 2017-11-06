@@ -100,7 +100,7 @@ char * make_time() {
 
     t = time(NULL);
     tmp = localtime(&t);
-    strftime(outstr, TIME_LEN, "[%D %_H:%0M:%0S]", tmp);
+    strftime(time_string, TIME_LEN, "[%D %_H:%0M:%0S]", tmp);
 
     return time_string;
 }
@@ -203,15 +203,10 @@ void print_eapol(char *time_str, const u_char *Buffer, int Size)
     fprintf(logfile, "%s     Type:%d (%s)\n", time_str, type, eaptypestr(type));
 }
 
-void print_packet(const u_char *Buffer, int Size)
+void print_packet(char *time_str, const u_char *Buffer, int Size)
 {
-    char *time_str = make_time();
-
     print_ethernet_header(time_str, Buffer, Size);
-
     print_eapol(time_str, Buffer, Size);
-
-    free(time_str);
 }
 
 
@@ -223,7 +218,7 @@ void internal_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
     fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
     fprintf(logfile, "%s Received %d bytes from internal interface\n", time_str, header->len);
 
-    print_packet(packet, header->len);
+    print_packet(time_str, packet, header->len);
 
     u_char code = packet[4];
     if(code == EAP_CODE_RESPONSE && shared_context.success) {
@@ -241,12 +236,13 @@ void internal_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
 
 void external_callback(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
+    char *time_str = make_time();
     struct ethhdr *eth = (struct ethhdr *)packet;
 
     fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
     fprintf(logfile, "%s Received %d bytes from external interface\n", time_str, header->len);
 
-    print_packet(packet, header->len);
+    print_packet(time_str, packet, header->len);
 
     u_char code = packet[4];
     if(code == EAP_CODE_SUCCESS) {
