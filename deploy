@@ -1,8 +1,10 @@
 #!/bin/bash
 
-rsync --exclude eapolproxy -a ./ root@192.168.1.5:~/eapolproxy/
+ROUTER=virluc01
 
-ssh root@192.168.1.5 <<EOF
+rsync --exclude eapolproxy -a ./ irql@$ROUTER:~/eapolproxy/
+
+ssh irql@$ROUTER <<EOF
 cd ~/eapolproxy && make
 EOF
 

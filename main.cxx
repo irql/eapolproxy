@@ -1,3 +1,4 @@
+#include <time.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -21,17 +22,21 @@
 #define ETH_FRAME_LEN   1514        /* Max. octets in frame sans FCS */
 
 #define ETH_P_EAP       0x888e
+#define ETH_P_802       0x8100
 
-unsigned char mac_nearest[ETH_ALEN]  = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x03 };
+enum {
+    EAP_CODE_REQUEST  = 1,
+    EAP_CODE_RESPONSE,
+    EAP_CODE_SUCCESS,
+    EAP_CODE_FAILURE
+};
 
-// eth0 address (to gateway)
-unsigned char mac_external[ETH_ALEN] = { 0x20, 0x25, 0x64, 0x0B, 0xCF, 0x71 };
+const char * internal_devname = "enp3s0";
+const char * external_devname = "enp4s0";
 
-// eth2 address (to aterm)
-unsigned char mac_internal[ETH_ALEN] = { 0x00, 0x25, 0x4B, 0xFC, 0xAC, 0x2E };
-
-// eth address of aterm
-unsigned char mac_aterm[ETH_ALEN]    = { 0x10, 0x66, 0x82, 0x23, 0xB3, 0x29 };
+struct context {
+    u_char success = 0;
+};
 
 struct ethhdr {
     unsigned char   h_dest[ETH_ALEN];   /* destination eth addr */
@@ -54,8 +59,8 @@ struct CaptureThread
     CaptureThread(const char * name)
     {
         this->devname = name;
-        this->thread = NULL;
         this->handle = NULL;
+        this->thread = 0;
     }
 
     void start()
@@ -82,21 +87,40 @@ struct CaptureThread
 
 FILE * logfile = stderr;
 
-const char * internal_devname = "eth2";
-const char * external_devname = "eth0";
-
+struct context shared_context;
 CaptureThread internal(internal_devname);
 CaptureThread external(external_devname);
 
+#define TIME_LEN 100
 
-void print_ethernet_header(const u_char *Buffer, int Size)
+char * make_time() {
+    char *time_string = (char *)malloc(TIME_LEN);
+    time_t t;
+    struct tm *tmp;
+
+    t = time(NULL);
+    tmp = localtime(&t);
+    strftime(outstr, TIME_LEN, "[%D %H:%M:%S]", tmp);
+
+    return time_string;
+}
+
+void print_ethernet_header(char *time_str, const u_char *Buffer, int Size)
 {
     struct ethhdr *eth = (struct ethhdr *)Buffer;
-     
-    fprintf(logfile , "Ethernet Header\n");
-    fprintf(logfile , "   |-Destination Address : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n", eth->h_dest[0] , eth->h_dest[1] , eth->h_dest[2] , eth->h_dest[3] , eth->h_dest[4] , eth->h_dest[5] );
-    fprintf(logfile , "   |-Source Address      : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n", eth->h_source[0] , eth->h_source[1] , eth->h_source[2] , eth->h_source[3] , eth->h_source[4] , eth->h_source[5] );
-    fprintf(logfile , "   |-Protocol            : 0x%04x \n",(unsigned short)ntohs(eth->h_proto));
+
+    fprintf(logfile , "%s Ethernet Header\n", time_str);
+    fprintf(logfile , "%s    |-Destination Address : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n",
+            time_str,
+            eth->h_dest[0] , eth->h_dest[1] , eth->h_dest[2] ,
+            eth->h_dest[3] , eth->h_dest[4] , eth->h_dest[5] );
+    fprintf(logfile , "%s    |-Source Address      : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n",
+            time_str,
+            eth->h_source[0] , eth->h_source[1] , eth->h_source[2] ,
+            eth->h_source[3] , eth->h_source[4] , eth->h_source[5] );
+    fprintf(logfile , "%s    |-Protocol            : 0x%04x \n",
+            time_str,
+            (unsigned short)ntohs(eth->h_proto));
 
     int lc = 0;
 
@@ -105,7 +129,7 @@ void print_ethernet_header(const u_char *Buffer, int Size)
     for(int i = 0; i < Size; i++)
     {
         if(lc == 0)
-            fprintf(logfile, "    0x%08x: ", i);
+            fprintf(logfile, "%s    0x%08x: ", time_str, i);
 
         fprintf(logfile, "%02x", Buffer[i]);
         buf[lc] = Buffer[i];
@@ -135,10 +159,10 @@ const char * eapcodestr(int code)
 {
     switch(code)
     {
-        case 1: return "REQUEST";
-        case 2: return "RESPONSE";
-        case 3: return "SUCCESS";
-        case 4: return "FAILURE";
+        case EAP_CODE_REQUEST: return "REQUEST";
+        case EAP_CODE_RESPONSE: return "RESPONSE";
+        case EAP_CODE_SUCCESS: return "SUCCESS";
+        case EAP_CODE_FAILURE: return "FAILURE";
     }
 
     return "UNKNOWN";
@@ -157,7 +181,7 @@ const char * eaptypestr(int type)
     return "";
 }
 
-void print_eapol(const u_char *Buffer, int Size)
+void print_eapol(char *time_str, const u_char *Buffer, int Size)
 {
     Buffer += sizeof(ethhdr);
 
@@ -170,47 +194,48 @@ void print_eapol(const u_char *Buffer, int Size)
     u_short len   = (Buffer[6] << 8) | Buffer[7];
     u_char  type  = Buffer[8];
 
-    fprintf(logfile, "   EncVer:%d\n", encver);
-    fprintf(logfile, "  EncType:%d\n", enctype);
-    fprintf(logfile, "   EncLen:%d\n", enclen);
-    fprintf(logfile, "     Code:%d (%s)\n", code, eapcodestr(code));
-    fprintf(logfile, "       Id:%d\n", id);
-    fprintf(logfile, "      Len:%d\n", len);
-    fprintf(logfile, "     Type:%d (%s)\n", type, eaptypestr(type));
+    fprintf(logfile, "%s   EncVer:%d\n", time_str, encver);
+    fprintf(logfile, "%s  EncType:%d\n", time_str, enctype);
+    fprintf(logfile, "%s   EncLen:%d\n", time_str, enclen);
+    fprintf(logfile, "%s     Code:%d (%s)\n", time_str, code, eapcodestr(code));
+    fprintf(logfile, "%s       Id:%d\n", time_str, id);
+    fprintf(logfile, "%s      Len:%d\n", time_str, len);
+    fprintf(logfile, "%s     Type:%d (%s)\n", time_str, type, eaptypestr(type));
 }
 
 void print_packet(const u_char *Buffer, int Size)
 {
-    print_ethernet_header(Buffer, Size);
+    char *time_str = make_time();
 
-    print_eapol(Buffer, Size);
+    print_ethernet_header(time_str, Buffer, Size);
+
+    print_eapol(time_str, Buffer, Size);
+
+    free(time_str);
 }
 
 
 void internal_callback(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
+    char *time_str = make_time();
     struct ethhdr *eth = (struct ethhdr *)packet;
 
-    if(ntohs(eth->h_proto) != ETH_P_EAP)
-        return;
-
-    fprintf(logfile, "------------------------------------------------------------------------------------------------------------\n");
-    fprintf(logfile, "Received %d bytes from internal interface\n", header->len);
+    fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
+    fprintf(logfile, "%s Received %d bytes from internal interface\n", time_str, header->len);
 
     print_packet(packet, header->len);
 
-    // dest address should always be the pseudo 'nearest' looking thing.
-    //assert( memcmp(&eth->h_dest, mac_nearest, ETH_ALEN) == 0 );
-    //assert( memcmp(&eth->h_source, mac_internal, ETH_ALEN) == 0 );
+    u_char code = packet[4];
+    if(code == EAP_CODE_RESPONSE && shared_context.success) {
+        fprintf(logfile, "%s BLOCKED packet since we're already authenticated.\n", time_str);
+    }
+    else {
+        int r = pcap_inject(external.handle, packet, header->len);
+        fprintf(logfile, "%s Forwarded %d bytes to external interface\n", time_str, r);
+        fprintf(logfile, "%s\n", time_str);
+    }
 
-    // send packet out on the other interface
-    //memcpy(eth->h_source, mac_external, ETH_ALEN);
-    //print_packet(packet, header->len);
-
-    int r = pcap_inject(external.handle, packet, header->len);
-
-    fprintf(logfile, "Forwarded %d bytes to external interface\n", r);
-    fprintf(logfile, "\n");
+    free(time_str);
 }
 
 
@@ -218,31 +243,29 @@ void external_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
 {
     struct ethhdr *eth = (struct ethhdr *)packet;
 
-    if(ntohs(eth->h_proto) != ETH_P_EAP)
-        return;
-
-    fprintf(logfile, "------------------------------------------------------------------------------------------------------------\n");
-    fprintf(logfile, "Received %d bytes from external interface\n", header->len);
+    fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
+    fprintf(logfile, "%s Received %d bytes from external interface\n", time_str, header->len);
 
     print_packet(packet, header->len);
 
-    //assert( memcmp(&eth->h_dest, mac_external, ETH_ALEN) == 0 );
-
-    // send packet out on the other interface
-    //memcpy(eth->h_dest, mac_aterm, ETH_ALEN);
-    //print_packet(packet, header->len);
+    u_char code = packet[4];
+    if(code == EAP_CODE_SUCCESS) {
+        shared_context.success = 1;
+    }
 
     int r = pcap_inject(internal.handle, packet, header->len);
 
-    fprintf(logfile, "Forwarded %d bytes to internal interface\n", r);
-    fprintf(logfile, "\n");
+    fprintf(logfile, "%s Forwarded %d bytes to internal interface\n", time_str, r);
+    fprintf(logfile, "%s \n", time_str);
+
+    free(time_str);
 }
 
 
 void * CaptureThread::thread_entry()
 {
     char errbuf[PCAP_ERRBUF_SIZE];
-    const char * eap_filter = "ether proto 0x888e";
+    const char * eap_filter = "ether proto 0x888e or ether proto 0x8100";
     struct bpf_program eap_program;
 
     handle = pcap_open_live(devname, BUFSIZ, true, 1000, errbuf);
@@ -277,138 +300,28 @@ void * CaptureThread::thread_entry()
     return NULL;
 }
 
-int docrc(u_char * buf, int size)
-{
-    uLong crc = crc32(0, NULL, 0);
-
-    crc = crc32(crc, buf, size);
-
-    buf[size+0] = crc & 0xff;
-    buf[size+1] = (crc >> 8) & 0xff;
-    buf[size+2] = (crc >> 16) & 0xff;
-    buf[size+3] = (crc >> 24) & 0xff;
-
-    return size + 4;
-}
-
-void send_identity(pcap_t * pcap)
-{
-    ethframe f;
-
-    memset(&f, 0, sizeof(f));
-
-    f.hdr.h_source[0] = 0x00;
-    f.hdr.h_source[1] = 0x25;
-    f.hdr.h_source[2] = 0x4b;
-    f.hdr.h_source[3] = 0xfc;
-    f.hdr.h_source[4] = 0xac;
-    f.hdr.h_source[5] = 0x2e; 
-
-    f.hdr.h_dest[0] = 0x10;
-    f.hdr.h_dest[1] = 0x66;
-    f.hdr.h_dest[2] = 0x82;
-    f.hdr.h_dest[3] = 0x23;
-    f.hdr.h_dest[4] = 0xb3;
-    f.hdr.h_dest[5] = 0x29;
-
-    f.hdr.h_proto = htons(ETH_P_EAP);
-
-    f.payload[0] = 0x01;    // eapol: version
-    f.payload[1] = 0x00;    // eapol: packet type
-    f.payload[2] = 0x00;    // eapol: length
-    f.payload[3] = 0x05;    // eapol: length
-
-int pktid = 5;
-
-    f.payload[4] = 0x01;    // EAP: request
-    f.payload[5] = pktid;   // EAP: id
-    f.payload[6] = 0x00;    // EAP: length
-    f.payload[7] = 0x05;    // EAP: length
-    f.payload[8] = 0x01;    // EAP: MD5 challenge
-    f.payload[9] = 0x00;    // EAP: MD5 size
-    f.payload[10] = 0x00;    // EAP: MD5 size
-    f.payload[11] = 0x00;    // EAP: MD5 size
-    f.payload[12] = 0x00;    // EAP: MD5 size
-
-    int n = sizeof(ethhdr) + 13;
-
-    print_packet((u_char *)&f, n);
-
-    int r = pcap_inject(pcap, &f, n);
-    printf("sent %d bytes\n", r);
-}
-
-
-void send_challenge(pcap_t * pcap)
-{
-    ethframe f;
-
-    memset(&f, 0, sizeof(f));
-
-    f.hdr.h_source[0] = 0x00;
-    f.hdr.h_source[1] = 0x25;
-    f.hdr.h_source[2] = 0x4b;
-    f.hdr.h_source[3] = 0xfc;
-    f.hdr.h_source[4] = 0xac;
-    f.hdr.h_source[5] = 0x2e; 
-
-    f.hdr.h_dest[0] = 0x10;
-    f.hdr.h_dest[1] = 0x66;
-    f.hdr.h_dest[2] = 0x82;
-    f.hdr.h_dest[3] = 0x23;
-    f.hdr.h_dest[4] = 0xb3;
-    f.hdr.h_dest[5] = 0x29;
-
-    f.hdr.h_proto = htons(ETH_P_EAP);
-
-    f.payload[0] = 0x01;    // eapol: version
-    f.payload[1] = 0x00;    // eapol: packet type
-    f.payload[2] = 0x00;    // eapol: length
-    f.payload[3] = 0x16;    // eapol: length
-
-int pktid = 5;
-
-    f.payload[4] = 0x01;    // EAP: request
-    f.payload[5] = pktid;   // EAP: id
-    f.payload[6] = 0x00;    // EAP: length
-    f.payload[7] = 0x16;    // EAP: length
-    f.payload[8] = 0x04;    // EAP: MD5 challenge
-    f.payload[9] = 0x10;    // EAP: MD5 size
-
-
-
-    int n = sizeof(ethhdr) + 10 + 16;
-
-    //n = docrc((u_char *)&f, n);
-
-    print_packet((u_char *)&f, n);
-
-    int r = pcap_inject(pcap, &f, n);
-    printf("sent %d bytes\n", r);
-}
-
-
 int main(int argc, const char **argv)
 {
+    char *time_str = make_time();
+    memset(&shared_context, 0, sizeof(struct context));
+
     fprintf(logfile, "eapolproxy starting %s\n", __DATE__);
 
-    fprintf(logfile, "starting %s\n", internal_devname);
+    fprintf(logfile, "%s starting %s\n", time_str, internal_devname);
     internal.start();
     while(internal.handle == NULL)
         usleep(100000);
 
-    fprintf(logfile, "starting %s\n", external_devname);
+    fprintf(logfile, "%s starting %s\n", time_str, external_devname);
     external.start();
 
     while(external.handle == NULL)
         usleep(100000);
 
-    fprintf(logfile, "ready\n");
+    fprintf(logfile, "%s ready\n", time_str);
 
-    //send_identity(internal.handle);
-    //sleep(1);
-    //send_challenge(internal.handle);
- 
+    free(time_str);
+
     internal.join();
     external.join();
 
