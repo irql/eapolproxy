@@ -3,7 +3,7 @@ PREFIX=/usr
 all: eapolproxy
 
 eapolproxy: main.cxx
-	g++ -O1 -o eapolproxy main.cxx -lpcap -lz -lpthread
+	g++ -O2 -o eapolproxy main.cxx -lpcap -lpthread
 
 install:
 	install eapolproxy $(PREFIX)/sbin/eapolproxy

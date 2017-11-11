@@ -8,7 +8,6 @@
 #include <pthread.h>
 #include <netinet/in.h>
 #include <sys/socket.h>    /* Must precede if*.h */
-#include <zlib.h>
 #include <assert.h>
 
 // EAPOL encapsulation: http://www.vocal.com/secure-communication/eapol-extensible-authentication-protocol-over-lan/
@@ -35,7 +34,7 @@ const char * internal_devname = "enp3s0";
 const char * external_devname = "enp4s0";
 
 struct context {
-    u_char success = 0;
+    u_char success;
 };
 
 struct ethhdr {
@@ -218,14 +217,12 @@ void internal_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
     fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
     fprintf(logfile, "%s Received %d bytes from internal interface\n", time_str, header->len);
 
-    print_packet(time_str, packet, header->len);
-
-    u_char code = packet[4];
-    if(code == EAP_CODE_RESPONSE && shared_context.success) {
-        fprintf(logfile, "%s BLOCKED packet since we're already authenticated.\n", time_str);
-    }
-    else {
+    u_char code = packet[sizeof(ethhdr) + 4];
+    if(code != EAP_CODE_RESPONSE || !shared_context.success) {
         int r = pcap_inject(external.handle, packet, header->len);
+
+        print_packet(time_str, packet, header->len);
+
         fprintf(logfile, "%s Forwarded %d bytes to external interface\n", time_str, r);
         fprintf(logfile, "%s\n", time_str);
     }
@@ -244,9 +241,12 @@ void external_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
 
     print_packet(time_str, packet, header->len);
 
-    u_char code = packet[4];
+    u_char code = packet[sizeof(ethhdr) + 4];
     if(code == EAP_CODE_SUCCESS) {
         shared_context.success = 1;
+    }
+    else {
+        shared_context.success = 0;
     }
 
     int r = pcap_inject(internal.handle, packet, header->len);
@@ -300,6 +300,7 @@ int main(int argc, const char **argv)
 {
     char *time_str = make_time();
     memset(&shared_context, 0, sizeof(struct context));
+    shared_context.success = 1;
 
     fprintf(logfile, "%s eapolproxy starting %s\n", time_str, __DATE__);
 
