@@ -214,11 +214,11 @@ void internal_callback(u_char *args, const struct pcap_pkthdr *header, const u_c
     char *time_str = make_time();
     struct ethhdr *eth = (struct ethhdr *)packet;
 
-    fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
-    fprintf(logfile, "%s Received %d bytes from internal interface\n", time_str, header->len);
-
     u_char code = packet[sizeof(ethhdr) + 4];
     if(code != EAP_CODE_RESPONSE || !shared_context.success) {
+        fprintf(logfile, "%s ------------------------------------------------------------------------------------------------------------\n", time_str);
+        fprintf(logfile, "%s Received %d bytes from internal interface\n", time_str, header->len);
+
         int r = pcap_inject(external.handle, packet, header->len);
 
         print_packet(time_str, packet, header->len);
